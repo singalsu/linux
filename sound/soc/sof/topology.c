@@ -269,6 +269,30 @@ static int sof_control_load_volume(struct snd_soc_component *scomp,
 	return 0;
 }
 
+static int sof_control_load_bytes(struct snd_soc_component *scomp,
+				  struct snd_sof_control *scontrol,
+				  struct snd_kcontrol_new *kc,
+				  struct snd_soc_tplg_ctl_hdr *hdr)
+{
+	struct snd_sof_dev *sdev = snd_soc_component_get_drvdata(scomp);
+	struct sof_ipc_ctrl_data *cdata;
+
+	/* init the volume get/put data */
+	scontrol->size = sizeof(struct sof_ipc_ctrl_data) + 252; /* TODO: replace 252 with macro */
+	scontrol->control_data = kzalloc(scontrol->size, GFP_KERNEL);
+	cdata = scontrol->control_data;
+	if (!scontrol->control_data)
+		return -ENOMEM;
+
+	scontrol->comp_id = sdev->next_comp_id;
+	scontrol->cmd = SOF_CTRL_CMD_BINARY;
+
+	dev_dbg(sdev->dev, "tplg: load kcontrol index %d chans %d\n",
+		scontrol->comp_id, scontrol->num_channels);
+
+	return 0;
+}
+
 /*
  * Topology Token Parsing.
  * New tokens should be added to headers and parsing tables below.
@@ -379,6 +403,14 @@ static const struct sof_topology_token src_tokens[] = {
 
 /* Tone */
 static const struct sof_topology_token tone_tokens[] = {
+};
+
+/* EQ FIR */
+static const struct sof_topology_token eq_fir_tokens[] = {
+};
+
+/* EQ IIR */
+static const struct sof_topology_token eq_iir_tokens[] = {
 };
 
 /* PCM */
@@ -707,6 +739,7 @@ static int sof_control_load(struct snd_soc_component *scomp, int index,
 			    struct snd_soc_tplg_ctl_hdr *hdr)
 {
 	struct soc_mixer_control *sm;
+	struct soc_bytes_ext  *sbe;
 	struct snd_sof_dev *sdev = snd_soc_component_get_drvdata(scomp);
 	struct snd_soc_dobj *dobj = NULL;
 	struct snd_sof_control *scontrol;
@@ -730,8 +763,12 @@ static int sof_control_load(struct snd_soc_component *scomp, int index,
 		dobj = &sm->dobj;
 		ret = sof_control_load_volume(scomp, scontrol, kc, hdr);
 		break;
-	case SND_SOC_TPLG_CTL_ENUM:
 	case SND_SOC_TPLG_CTL_BYTES:
+		sbe = (struct soc_bytes_ext *)kc->private_value;
+		dobj = &sbe->dobj;
+		ret = sof_control_load_bytes(scomp, scontrol, kc, hdr);
+		break;
+	case SND_SOC_TPLG_CTL_ENUM:
 	case SND_SOC_TPLG_CTL_ENUM_VALUE:
 	case SND_SOC_TPLG_CTL_RANGE:
 	case SND_SOC_TPLG_CTL_STROBE:
@@ -1306,6 +1343,95 @@ err:
 	kfree(tone);
 	return ret;
 }
+/*
+ * Effect Topology
+ * Only EQ FIR supprted at this moment
+ */
+
+static int sof_widget_load_effect(struct snd_soc_component *scomp, int index,
+				  struct snd_sof_widget *swidget,
+				  struct snd_soc_tplg_dapm_widget *tw,
+				  struct sof_ipc_comp_reply *r)
+{
+	struct snd_sof_dev *sdev = snd_soc_component_get_drvdata(scomp);
+	struct snd_soc_tplg_private *private = &tw->priv;
+	struct sof_ipc_comp_eq_fir eq_iir;
+	struct sof_ipc_comp_eq_iir eq_fir;
+	int ret;
+
+#if 1
+        /* configure IIR EQ IPC message */
+	memset(&eq_iir, 0, sizeof(eq_iir));
+	eq_iir.comp.hdr.size = sizeof(eq_iir);
+	eq_iir.comp.hdr.cmd = SOF_IPC_GLB_TPLG_MSG | SOF_IPC_TPLG_COMP_NEW;
+	eq_iir.comp.id = swidget->comp_id;
+	eq_iir.comp.pipeline_id = index;
+
+	eq_iir.comp.type = SOF_COMP_EQ_IIR;
+	ret = sof_parse_tokens(scomp, &eq_iir, eq_iir_tokens,
+			 ARRAY_SIZE(eq_iir_tokens), private->array,
+			 private->size);
+	if (ret) {
+		dev_err(sdev->dev, "error: parse EQ tokens failed %d\n",
+			private->size);
+		return ret;
+	}
+
+	sof_parse_tokens(scomp, &eq_iir.config, comp_tokens,
+			 ARRAY_SIZE(comp_tokens), private->array,
+			 private->size);
+	if (ret) {
+		dev_err(sdev->dev, "error: parse EQ.cfg tokens failed %d\n",
+			le32_to_cpu(private->size));
+	}
+
+	dev_dbg(sdev->dev, "eq iir %s created\n", swidget->widget->name);
+
+	sof_dbg_comp_config(scomp, &eq_iir.config);
+
+	ret = sof_ipc_tx_message(sdev->ipc,
+				 eq_iir.comp.hdr.cmd, &eq_iir, sizeof(eq_iir), r,
+				 sizeof(*r));
+
+
+#else
+        /* configure FIR EQ IPC message */
+	memset(&eq_fir, 0, sizeof(eq_fir));
+	eq_fir.comp.hdr.size = sizeof(eq_fir);
+	eq_fir.comp.hdr.cmd = SOF_IPC_GLB_TPLG_MSG | SOF_IPC_TPLG_COMP_NEW;
+	eq_fir.comp.id = swidget->comp_id;
+	eq_fir.comp.pipeline_id = index;
+
+	eq_fir.comp.type = SOF_COMP_EQ_FIR;
+	ret = sof_parse_tokens(scomp, &eq_fir, eq_fir_tokens,
+			 ARRAY_SIZE(eq_fir_tokens), private->array,
+			 private->size);
+	if (ret) {
+		dev_err(sdev->dev, "error: parse EQ tokens failed %d\n",
+			private->size);
+		return ret;
+	}
+
+	sof_parse_tokens(scomp, &eq_fir.config, comp_tokens,
+			 ARRAY_SIZE(comp_tokens), private->array,
+			 private->size);
+	if (ret) {
+		dev_err(sdev->dev, "error: parse EQ.cfg tokens failed %d\n",
+			le32_to_cpu(private->size));
+	}
+
+	dev_dbg(sdev->dev, "eq fir %s created\n", swidget->widget->name);
+
+	sof_dbg_comp_config(scomp, &eq_fir.config);
+
+	ret = sof_ipc_tx_message(sdev->ipc,
+				 eq_fir.comp.hdr.cmd, &eq_fir, sizeof(eq_fir), r,
+				 sizeof(*r));
+
+#endif
+
+	return ret;
+}
 
 /*
  * Generic widget loader.
@@ -1403,12 +1529,14 @@ static int sof_widget_ready(struct snd_soc_component *scomp, int index,
 	case snd_soc_dapm_siggen:
 		ret = sof_widget_load_siggen(scomp, index, swidget, tw, &reply);
 		break;
+	case snd_soc_dapm_effect:
+		ret = sof_widget_load_effect(scomp, index, swidget, tw, &reply);
+		break;
 	case snd_soc_dapm_mux:
 	case snd_soc_dapm_demux:
 	case snd_soc_dapm_switch:
 	case snd_soc_dapm_dai_link:
 	case snd_soc_dapm_kcontrol:
-	case snd_soc_dapm_effect:
 	default:
 		dev_warn(sdev->dev, "warning: widget type %d name %s not handled\n",
 			 swidget->id, tw->name);
@@ -2110,7 +2238,7 @@ static const struct snd_soc_tplg_kcontrol_ops sof_io_ops[] = {
 
 /* vendor specific bytes ext handlers available for binding */
 static const struct snd_soc_tplg_bytes_ext_ops sof_bytes_ext_ops[] = {
-{},
+	{SOF_TPLG_KCTL_BYTES_ID, snd_sof_bytes_ext_get, snd_sof_bytes_ext_put},
 };
 
 static struct snd_soc_tplg_ops sof_tplg_ops = {

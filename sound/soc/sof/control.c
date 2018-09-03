@@ -268,3 +268,82 @@ out:
 			err);
 	return ret;
 }
+
+int snd_sof_bytes_ext_put(struct snd_kcontrol *kcontrol,
+			  const unsigned int __user *bytes,
+			  unsigned int size)
+{
+	struct soc_bytes_ext *be =
+		(struct soc_bytes_ext *)kcontrol->private_value;
+	struct snd_sof_control *scontrol = be->dobj.private;
+	struct snd_sof_dev *sdev = scontrol->sdev;
+	struct sof_ipc_ctrl_data *cdata = scontrol->control_data;
+	//unsigned int i, channels = scontrol->num_channels;
+
+	pm_runtime_get_sync(sdev->dev);
+
+	/* the first two ints of the bytes data contain a dummy tag
+	 * and the size, so copy from the 3rd int
+	 * TODO: or should we send the size as well so the firmware
+	 * can allocate memory accordingly?
+	 */
+
+	dev_dbg(sdev->dev, "size of data is %x\n", bytes[1]);
+
+	if (copy_from_user(cdata->data->data, bytes + 2, bytes[1]))
+		return -EFAULT;
+
+	dev_dbg(sdev->dev, "byte 0 %x\n", cdata->data->data[0]);
+	dev_dbg(sdev->dev, "byte 1 %x\n", cdata->data->data[1]);
+	dev_dbg(sdev->dev, "byte 2 %x\n", cdata->data->data[2]);
+	dev_dbg(sdev->dev, "byte 3 %x\n", cdata->data->data[3]);
+	dev_dbg(sdev->dev, "byte 4 %x\n", cdata->data->data[4]);
+	dev_dbg(sdev->dev, "byte 5 %x\n", cdata->data->data[5]);
+	dev_dbg(sdev->dev, "byte 6 %x\n", cdata->data->data[6]);
+	dev_dbg(sdev->dev, "byte 7 %x\n", cdata->data->data[7]);
+
+	/* set the ABI header values */
+	cdata->data->magic = SOF_ABI_MAGIC;
+	cdata->data->abi = SOF_ABI_VERSION;
+	cdata->data->comp_abi = SOF_ABI_VERSION;
+
+	/* notify DSP of mixer updates */
+	snd_sof_ipc_set_comp_data(sdev->ipc, scontrol, SOF_IPC_COMP_SET_DATA,
+				  SOF_CTRL_TYPE_DATA_SET, scontrol->cmd);
+
+	pm_runtime_mark_last_busy(sdev->dev);
+	pm_runtime_put_autosuspend(sdev->dev);
+	return 0;
+}
+
+int snd_sof_bytes_ext_get(struct snd_kcontrol *kcontrol,
+			  unsigned int __user *bytes,
+			  unsigned int size)
+{
+	struct soc_bytes_ext *be =
+		(struct soc_bytes_ext *)kcontrol->private_value;
+	struct snd_sof_control *scontrol = be->dobj.private;
+	struct snd_sof_dev *sdev = scontrol->sdev;
+	struct sof_ipc_ctrl_data *cdata = scontrol->control_data;
+	//unsigned int i, channels = scontrol->num_channels;
+	unsigned int tag = 0;
+
+	pm_runtime_get_sync(sdev->dev);
+
+	dev_dbg(sdev->dev, "getting data and command is %d\n", scontrol->cmd);
+	/* get all the mixer data from DSP */
+	snd_sof_ipc_get_comp_data(sdev->ipc, scontrol, SOF_IPC_COMP_GET_DATA,
+				  SOF_CTRL_TYPE_DATA_GET, scontrol->cmd);
+
+	/* TODO: replace 252 with actual size */
+	if (copy_to_user(bytes, &tag, sizeof(u32)))
+		return -EFAULT;
+	if (copy_to_user(bytes + 1, &size, sizeof(u32)))
+		return -EFAULT;
+	if (copy_to_user(bytes + 2, cdata->data->data, 252))
+		return -EFAULT;
+
+	pm_runtime_mark_last_busy(sdev->dev);
+	pm_runtime_put_autosuspend(sdev->dev);
+	return 0;
+}
