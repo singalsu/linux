@@ -766,6 +766,7 @@ static int sof_control_load(struct snd_soc_component *scomp, int index,
 		ret = sof_control_load_volume(scomp, scontrol, kc, hdr);
 		break;
 	case SND_SOC_TPLG_CTL_BYTES:
+		printk(KERN_DEBUG "Got  SND_SOC_TPLG_CTL_BYTES");
 		sbe = (struct soc_bytes_ext *)kc->private_value;
 		dobj = &sbe->dobj;
 		ret = sof_control_load_bytes(scomp, scontrol, kc, hdr);
