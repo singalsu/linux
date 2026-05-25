@@ -43,7 +43,8 @@ sof_ipc4_compr_get_module(struct snd_sof_pcm *spcm, int dir)
 		if (!swidget)
 			continue;
 
-		if (swidget->widget->id == id)
+		if (swidget->widget->id == id ||
+		    swidget->widget->id == snd_soc_dapm_effect)
 			return swidget->private;
 	}
 
