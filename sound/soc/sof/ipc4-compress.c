@@ -528,10 +528,12 @@ static int sof_ipc4_compr_trigger(struct snd_soc_component *component,
 	struct snd_sof_dev *sdev = snd_soc_component_get_drvdata(component);
 	struct snd_soc_pcm_runtime *rtd = cstream->private_data;
 	const struct sof_ipc_pcm_ops *pcm_ops = sof_ipc_get_ops(sdev, pcm);
+	struct snd_sof_pcm_stream_pipeline_list *pipeline_list;
 	struct snd_sof_pcm *spcm;
 	int dir = cstream->direction;
 	bool trigger_platform = false;
 	int ret = 0;
+	int i;
 
 	spcm = snd_sof_find_spcm_dai(component, rtd);
 	if (!spcm) {
@@ -563,7 +565,45 @@ static int sof_ipc4_compr_trigger(struct snd_soc_component *component,
 
 	spcm_dbg(spcm, dir, "Entry: trigger (cmd: %d)\n", cmd);
 
+	/*
+	 * Compress streams bypass the DPCM framework, so BE pipelines marked
+	 * with skip_during_fe_trigger are never started by a separate BE
+	 * trigger.  Temporarily clear the flag so that pcm_ops->trigger()
+	 * includes them.
+	 */
+	pipeline_list = &spcm->stream[dir].pipeline_list;
+	for (i = 0; i < pipeline_list->count; i++) {
+		struct snd_sof_pipeline *spipe = pipeline_list->pipelines[i];
+		struct sof_ipc4_pipeline *pipeline;
+
+		if (!spipe || !spipe->pipe_widget || !spipe->pipe_widget->private)
+			continue;
+
+		pipeline = spipe->pipe_widget->private;
+		pipeline->skip_during_fe_trigger = false;
+	}
+
 	ret = pcm_ops->trigger(component, NULL, spcm, cmd, dir);
+
+	/*
+	 * Restore skip_during_fe_trigger on BE pipelines. The flag is
+	 * originally set by the HDA DAI ops during BE hw_params for any
+	 * pipeline that contains a DAI copier.  Since we cannot easily
+	 * distinguish FE from BE pipelines here, restore it on all
+	 * non-first pipelines — the first pipeline in the list is always
+	 * the FE host pipeline.
+	 */
+	for (i = 1; i < pipeline_list->count; i++) {
+		struct snd_sof_pipeline *spipe = pipeline_list->pipelines[i];
+		struct sof_ipc4_pipeline *pipeline;
+
+		if (!spipe || !spipe->pipe_widget || !spipe->pipe_widget->private)
+			continue;
+
+		pipeline = spipe->pipe_widget->private;
+		pipeline->skip_during_fe_trigger = true;
+	}
+
 	if (ret < 0) {
 		spcm_err(spcm, dir, "pcm_ops->trigger failed for cmd %d\n", cmd);
 		return ret;
